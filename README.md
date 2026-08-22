@@ -4,7 +4,8 @@ Lightweight userscripts for Brave Browser’s Custom Scriptlets feature. Also co
 
 These scriptlets are designed to replace common browser extensions with minimal overhead and zero configuration.
 
-**⚠️ Always review third-party code before executing it in your browser environment. ⚠️**
+> [!WARNING]
+> Always review third-party code before executing it in your browser environment.
 
 ## Usage
 
@@ -88,11 +89,14 @@ Edit the configuration section near the top of the script:
 ```js
 var USER_CONFIG = {
     BLOCKED_COUNTRIES: ['cuba', 'chad', 'southeast asia'],
-    BLOCKED_POST_ACTION: 'hide'
+    BLOCKED_POST_ACTION: 'hide',
     // 'hide'      = completely removes matching posts
     // 'highlight' = keeps matching posts visible with a red border
     // 'dim'       = darkens matching posts until hovered
     // 'collapse'  = replaces matching posts with a compact notice that can be clicked/tapped to reveal them
+    REQUIRE_INTERACTION: true
+    // true  = checks only after user interaction, with no delay
+    // false = checks automatically, spacing API requests 3 seconds apart
 };
 ```
 
