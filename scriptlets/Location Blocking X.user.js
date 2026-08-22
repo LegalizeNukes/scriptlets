@@ -481,40 +481,46 @@ var USER_CONFIG = {
             if (root.matches?.(CONFIG.SELECTOR)) this.registerElement(root);
             root.querySelectorAll?.(CONFIG.SELECTOR).forEach(el => this.registerElement(el));
         }
-        // Associate a username element with its current account. Cached results can be
-        // reused; otherwise interaction mode shows ❔ and automatic mode schedules a lookup.
+        // Associate a username element with its current account. Always reuse a valid
+        // cached result first; only uncached accounts require a click in interaction mode
+        // or get scheduled automatically in automatic mode.
         registerElement(element) {
             const screenName = this.extractUsername(element);
             if (!screenName) return;
             const key = normalizeScreenName(screenName);
+            const cached = this.getCached(key);
             const previous = this.elementState.get(element);
+
             if (previous?.screenName === key && previous.status !== 'stale') {
-                if (this.requiresInteraction() && previous.status !== 'done') {
+                if (cached) {
+                    this.applyResult(element, key, cached);
+                    return;
+                }
+                if (this.requiresInteraction()) {
                     this.renderInteraction(element, key);
                     return;
                 }
-                const cached = this.getCached(key);
-                if (cached && previous.status === 'done') {
-                    this.applyResult(element, key, cached);
-                } else if (!cached && (previous.status === 'waiting' || previous.status === 'processing')) {
+                if (previous.status === 'waiting' || previous.status === 'processing') {
                     this.renderPending(element, key);
                 }
                 return;
             }
+
             if (previous && previous.screenName !== key) this.resetElement(element);
             this.elementState.set(element, {
                 screenName: key,
                 status: 'waiting'
             });
-            if (this.requiresInteraction()) {
-                this.renderInteraction(element, key);
-                return;
-            }
-            const cached = this.getCached(key);
+
             if (cached) {
                 this.applyResult(element, key, cached);
                 return;
             }
+            if (this.requiresInteraction()) {
+                this.renderInteraction(element, key);
+                return;
+            }
+
             this.renderPending(element, key);
             if (this.intersectionObserver) this.intersectionObserver.observe(element);
             else this.processElement(element);
