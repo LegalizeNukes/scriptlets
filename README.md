@@ -1,4 +1,4 @@
-# Userscript Collection
+# Scriptlets
 
 Lightweight userscripts for common video, social-media, navigation, and reading-site tasks. They are intended for userscript managers and other compatible script-hosting environments.
 
