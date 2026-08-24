@@ -1,411 +1,197 @@
 // ==UserScript==
 // @name         SponsorBlock YouTube
-// @match        https://youtube.com/*
 // @match        https://*.youtube.com/*
-// @exclude      https://youtube.com/shorts/*
 // @exclude      https://*.youtube.com/shorts/*
+// @run-at       document-start
+// @grant        none
 // ==/UserScript==
+// Cache segments locally and rebind the active video after SPA navigation.
 (function () {
-    'use strict';
-
-    const API = 'https://sponsor.ajay.app';
-
-    const CATEGORIES = [
-        'sponsor',
-        'selfpromo',
-        'interaction',
-        'intro',
-        'outro',
-        'preview',
-        'music_offtopic',
-        'exclusive_access'
-    ];
-
-    const FILTERS =
-        `&categories=${encodeURIComponent(JSON.stringify(CATEGORIES))}` +
-        `&actionTypes=${encodeURIComponent('["skip"]')}`;
-
-    const EARLY = 0.2;
-    const TRACK_VIEWS = true;
-
-    const VIDEO_SELECTOR =
-        '#movie_player video.html5-main-video,' +
-        'video.html5-main-video,' +
-        '#movie_player video,' +
-        'video';
-
-    let video = null;
-    let videoId = '';
-    let boundHref = '';
-    let segments = [];
-    let request = null;
-    let observer = null;
-    let timer = 0;
-    let dueAt = Infinity;
-
-    function getVideoId() {
-        if (location.pathname.startsWith('/shorts/')) return '';
-
-        return new URLSearchParams(location.search).get('v') || '';
+  'use strict';
+  const C = [
+      'sponsor',
+      'selfpromo',
+      'interaction',
+      'intro',
+      'outro',
+      'preview',
+      'music_offtopic',
+      'exclusive_access',
+    ],
+    A = ['skip'],
+    T = 0.2,
+    E = 'https://sponsor.ajay.app',
+    TRACK = true,
+    S = 'video',
+    K = 'sponsorblock:',
+    D = 864e5,
+    N = 36e5;
+  let v = null,
+    id = null,
+    segs = [],
+    ctrl = null,
+    mo = null,
+    tm = 0,
+    due = 1 / 0,
+    href = '';
+  function VID() {
+    const u = new URL(location.href);
+    return u.pathname.startsWith('/shorts/') ? null : u.searchParams.get('v');
+  }
+  function cancel() {
+    if (ctrl) (ctrl.abort(), (ctrl = null));
+  }
+  function stop() {
+    if (tm) (clearTimeout(tm), (tm = 0), (due = 1 / 0));
+    if (v) v.removeEventListener('timeupdate', tick);
+    v = null;
+    id = null;
+    href = '';
+    segs = [];
+    cancel();
+    if (mo) (mo.disconnect(), (mo = null));
+  }
+  function track(a) {
+    if (!TRACK || !a.length) return;
+    for (const u of a)
+      try {
+        (navigator.sendBeacon &&
+          navigator.sendBeacon(`${E}/api/viewedVideoSponsorTime?UUID=${encodeURIComponent(u)}`)) ||
+          fetch(`${E}/api/viewedVideoSponsorTime?UUID=${encodeURIComponent(u)}`, {
+            method: 'POST',
+            keepalive: true,
+          }).catch(() => {});
+      } catch {}
+  }
+  function merge(a) {
+    a.sort((x, y) => x.start - y.start);
+    const o = [];
+    for (const s of a) {
+      const p = o[o.length - 1];
+      p && s.start <= p.end
+        ? ((p.end = Math.max(p.end, s.end)), p.uuid.push(...s.uuid))
+        : o.push(s);
     }
-
-    function cancelRequest() {
-        if (!request) return;
-
-        request.abort();
-        request = null;
+    return o;
+  }
+  function cached(x) {
+    try {
+      const y = localStorage.getItem(K + x);
+      if (!y) return null;
+      const z = JSON.parse(y);
+      if (z && Array.isArray(z.d) && Date.now() - z.t < (z.d.length ? D : N)) return z.d;
+      localStorage.removeItem(K + x);
+    } catch {}
+    return null;
+  }
+  function save(x, j) {
+    try {
+      localStorage.setItem(K + x, JSON.stringify({ t: Date.now(), d: j }));
+    } catch {}
+  }
+  function use(x, j) {
+    if (!Array.isArray(j) || id !== x) return;
+    segs = merge(
+      j
+        .filter((s) => s && s.actionType === 'skip' && s.segment)
+        .map((s) => ({ start: +s.segment[0], end: +s.segment[1], uuid: s.UUID ? [s.UUID] : [] }))
+        .filter((s) => Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+    );
+    tick();
+  }
+  async function load(x) {
+    cancel();
+    const z = cached(x);
+    if (z) return use(x, z);
+    const c = new AbortController();
+    ctrl = c;
+    try {
+      const r = await fetch(
+        `${E}/api/skipSegments?videoID=${encodeURIComponent(x)}&categories=${encodeURIComponent(JSON.stringify(C))}&actionTypes=${encodeURIComponent(JSON.stringify(A))}`,
+        { signal: c.signal }
+      );
+      if (id !== x) return;
+      if (r.status === 404) return (save(x, []), use(x, []));
+      if (!r.ok) return;
+      const j = await r.json();
+      if (!Array.isArray(j) || id !== x) return;
+      save(x, j);
+      use(x, j);
+    } catch {
+    } finally {
+      ctrl === c && (ctrl = null);
     }
-
-    function disconnectObserver() {
-        if (!observer) return;
-
-        observer.disconnect();
-        observer = null;
+  }
+  function tick() {
+    if (!v || !segs.length) return;
+    if (location.href !== href) return q(0);
+    const t = v.currentTime;
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i];
+      if (s.start > t + T) break;
+      if (t >= s.start - T && t < s.end) {
+        v.currentTime = s.end;
+        track(s.uuid);
+        segs.splice(i, 1);
+        return;
+      }
     }
-
-    function clearBinding() {
-        if (video) {
-            video.removeEventListener('timeupdate', onTimeUpdate);
-        }
-
-        video = null;
-        videoId = '';
-        boundHref = '';
-        segments = [];
-
-        cancelRequest();
-        disconnectObserver();
-    }
-
-    function cancelScheduledSetup() {
-        if (!timer) return;
-
-        clearTimeout(timer);
-        timer = 0;
-        dueAt = Infinity;
-    }
-
-    function stop() {
-        cancelScheduledSetup();
-        clearBinding();
-    }
-
-    function scheduleSetup(delay = 0) {
-        const target = performance.now() + delay;
-
-        // Keep only the earliest pending setup.
-        if (timer && target >= dueAt) return;
-
-        if (timer) {
-            clearTimeout(timer);
-        }
-
-        dueAt = target;
-
-        timer = setTimeout(() => {
-            timer = 0;
-            dueAt = Infinity;
-            setup();
-        }, Math.max(0, target - performance.now()));
-    }
-
-    function reportViewed(uuids) {
-        if (!TRACK_VIEWS) return;
-
-        for (const uuid of uuids) {
-            if (!uuid) continue;
-
-            const url =
-                `${API}/api/viewedVideoSponsorTime?UUID=` +
-                encodeURIComponent(uuid);
-
-            try {
-                if (
-                    typeof navigator.sendBeacon === 'function' &&
-                    navigator.sendBeacon(url)
-                ) {
-                    continue;
-                }
-
-                fetch(url, {
-                    method: 'POST',
-                    keepalive: true,
-                    credentials: 'omit'
-                }).catch(() => {});
-            } catch (_) {}
-        }
-    }
-
-    function normalizeSegments(data) {
-        const list = [];
-
-        for (const item of data) {
-            if (
-                !item ||
-                item.actionType !== 'skip' ||
-                !Array.isArray(item.segment)
-            ) {
-                continue;
-            }
-
-            const start = Number(item.segment[0]);
-            const end = Number(item.segment[1]);
-
-            if (
-                !Number.isFinite(start) ||
-                !Number.isFinite(end) ||
-                end <= start
-            ) {
-                continue;
-            }
-
-            list.push({
-                start,
-                end,
-                uuids: item.UUID ? [item.UUID] : []
-            });
-        }
-
-        list.sort((a, b) => a.start - b.start);
-
-        // Merge only overlapping segments.
-        // Nearby but separate segments remain separate.
-        const merged = [];
-
-        for (const segment of list) {
-            const previous = merged[merged.length - 1];
-
-            if (previous && segment.start <= previous.end) {
-                if (segment.end > previous.end) {
-                    previous.end = segment.end;
-                }
-
-                if (segment.uuids.length) {
-                    previous.uuids.push(...segment.uuids);
-                }
-            } else {
-                merged.push(segment);
-            }
-        }
-
-        return merged;
-    }
-
-    async function loadSegments(id) {
-        cancelRequest();
-
-        const controller = new AbortController();
-        request = controller;
-
-        try {
-            const response = await fetch(
-                `${API}/api/skipSegments?videoID=` +
-                    `${encodeURIComponent(id)}${FILTERS}`,
-                {
-                    signal: controller.signal,
-                    credentials: 'omit'
-                }
-            );
-
-            if (!response.ok || videoId !== id) return;
-
-            const data = await response.json();
-
-            if (!Array.isArray(data) || videoId !== id) return;
-
-            segments = normalizeSegments(data);
-
-            onTimeUpdate();
-        } catch (_) {
-            // Abort, offline state, and API failures stay silent.
-        } finally {
-            if (request === controller) {
-                request = null;
-            }
-        }
-    }
-
-    function onTimeUpdate() {
-        if (!video || !segments.length) return;
-
-        // Cheap SPA-navigation fallback.
-        // No permanent polling interval is needed.
-        if (location.href !== boundHref) {
-            scheduleSetup(0);
-            return;
-        }
-
-        const time = video.currentTime;
-
-        for (let i = 0; i < segments.length; i++) {
-            const segment = segments[i];
-
-            if (segment.start > time + EARLY) {
-                break;
-            }
-
-            if (
-                time >= segment.start - EARLY &&
-                time < segment.end
-            ) {
-                video.currentTime = segment.end;
-
-                reportViewed(segment.uuids);
-
-                segments.splice(i, 1);
-
-                return;
-            }
-        }
-    }
-
-    function bind(nextVideo, id) {
-        clearBinding();
-
-        video = nextVideo;
-        videoId = id;
-        boundHref = location.href;
-
-        video.addEventListener(
-            'timeupdate',
-            onTimeUpdate,
-            { passive: true }
-        );
-
-        loadSegments(id);
-    }
-
-    function watchForVideo() {
-        if (observer) return;
-
-        const root = document.documentElement;
-
-        if (!root) {
-            scheduleSetup(20);
-            return;
-        }
-
-        observer = new MutationObserver(() => {
-            if (
-                !getVideoId() ||
-                !document.querySelector(VIDEO_SELECTOR)
-            ) {
-                return;
-            }
-
-            disconnectObserver();
-            scheduleSetup(0);
+  }
+  function bind(nv, x) {
+    stop();
+    v = nv;
+    id = x;
+    href = location.href;
+    v.addEventListener('timeupdate', tick, { passive: true });
+    load(x);
+  }
+  function setup() {
+    const x = VID();
+    if (!x) return stop();
+    const nv = document.querySelector(S);
+    if (!nv) {
+      if (!mo) {
+        mo = new MutationObserver(() => {
+          VID() && document.querySelector(S) && (mo.disconnect(), (mo = null), q(0));
         });
-
-        observer.observe(root, {
-            childList: true,
-            subtree: true
-        });
+        mo.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      return;
     }
-
-    function setup() {
-        const id = getVideoId();
-
-        if (!id) {
-            clearBinding();
-            return;
-        }
-
-        const nextVideo =
-            document.querySelector(VIDEO_SELECTOR);
-
-        if (!nextVideo) {
-            if (video || videoId !== id) {
-                clearBinding();
-            }
-
-            watchForVideo();
-            return;
-        }
-
-        if (video === nextVideo && videoId === id) {
-            // Synchronize URL state without rebinding.
-            boundHref = location.href;
-
-            disconnectObserver();
-
-            return;
-        }
-
-        bind(nextVideo, id);
-    }
-
-    function onFallbackNavigation() {
-        stop();
-        scheduleSetup(120);
-    }
-
-    const passiveCapture = {
-        capture: true,
-        passive: true
-    };
-
-    document.addEventListener(
-        'DOMContentLoaded',
-        () => scheduleSetup(0),
-        passiveCapture
+    if (v === nv && id === x) return ((href = location.href), mo && (mo.disconnect(), (mo = null)));
+    bind(nv, x);
+  }
+  function q(d) {
+    const n = performance.now() + d;
+    if (tm && n >= due) return;
+    tm && clearTimeout(tm);
+    due = n;
+    tm = setTimeout(
+      () => {
+        tm = 0;
+        due = 1 / 0;
+        setup();
+      },
+      Math.max(0, n - performance.now())
     );
-
-    window.addEventListener(
-        'load',
-        () => scheduleSetup(0),
-        passiveCapture
-    );
-
-    window.addEventListener(
-        'pageshow',
-        () => scheduleSetup(50),
-        passiveCapture
-    );
-
-    window.addEventListener(
-        'pagehide',
-        stop,
-        passiveCapture
-    );
-
-    document.addEventListener(
-        'yt-navigate-start',
-        stop,
-        passiveCapture
-    );
-
-    document.addEventListener(
-        'yt-navigate-finish',
-        () => scheduleSetup(80),
-        passiveCapture
-    );
-
-    document.addEventListener(
-        'yt-page-data-updated',
-        () => scheduleSetup(100),
-        passiveCapture
-    );
-
-    // Important for mobile YouTube and Safari:
-    // the same video element may be reused across navigations.
-    document.addEventListener(
-        'loadedmetadata',
-        () => scheduleSetup(0),
-        true
-    );
-
-    document.addEventListener(
-        'play',
-        () => scheduleSetup(0),
-        true
-    );
-
-    window.addEventListener(
-        'popstate',
-        onFallbackNavigation,
-        passiveCapture
-    );
-
-    scheduleSetup(0);
+  }
+  const o = { capture: true, passive: true };
+  document.addEventListener('DOMContentLoaded', () => q(0), o);
+  window.addEventListener('load', () => q(0), o);
+  window.addEventListener('pageshow', () => q(50), o);
+  window.addEventListener('pagehide', stop, o);
+  document.addEventListener('yt-navigate-start', stop, o);
+  document.addEventListener('yt-navigate-finish', () => q(80), o);
+  document.addEventListener('yt-page-data-updated', () => q(100), o);
+  document.addEventListener('loadedmetadata', () => q(0), true);
+  document.addEventListener('play', () => q(0), true);
+  window.addEventListener(
+    'popstate',
+    () => {
+      stop();
+      q(120);
+    },
+    o
+  );
+  q(0);
 })();

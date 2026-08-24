@@ -1,581 +1,419 @@
 // ==UserScript==
 // @name         Return Dislikes YouTube
-// @match        https://youtube.com/*
 // @match        https://*.youtube.com/*
-// @exclude      https://youtube.com/shorts/*
 // @exclude      https://*.youtube.com/shorts/*
+// @run-at       document-start
+// @grant        none
 // ==/UserScript==
-
-(function() {
-    "use strict";
-
-    // -------------------------------------------------------------------------
-    // Configuration and selectors
-    // -------------------------------------------------------------------------
-
-    const API_URL = "https://returnyoutubedislikeapi.com/votes?videoId=",
-        CACHE_LIMIT = 100,
-        UI_WAIT_LIMIT = 6e3,
-        IS_MOBILE_SITE = location.hostname === "m.youtube.com",
-        formatter = new Intl.NumberFormat("en", {
-            notation: "compact",
-            maximumFractionDigits: 1
-        }),
-        DESKTOP_BUTTON_SELECTORS = [
-            "dislike-button-view-model button",
-            "dislike-button-view-model button-view-model > button",
-            "dislike-button-view-model .ytSpecButtonViewModelHost button",
-            "dislike-button-view-model .yt-spec-button-shape-next",
-            "#segmented-dislike-button button",
-            'button[aria-label*="Dislike" i]'
-        ],
-        MOBILE_BUTTON_SELECTORS = [
-            "ytm-segmented-like-dislike-button-renderer dislike-button-view-model button",
-            "ytm-slim-video-action-bar-renderer dislike-button-view-model button",
-            'ytm-segmented-like-dislike-button-renderer button[aria-label*="Dislike" i]',
-            'ytm-slim-video-action-bar-renderer button[aria-label*="Dislike" i]',
-            'ytm-like-button-renderer button[aria-label*="Dislike" i]',
-            "dislike-button-view-model button",
-            "#segmented-dislike-button button",
-            'button[aria-label*="Dislike" i]'
-        ],
-        MOBILE_LIKE_BUTTON_SELECTORS = [
-            "ytm-segmented-like-dislike-button-renderer like-button-view-model button",
-            "ytm-slim-video-action-bar-renderer like-button-view-model button",
-            "ytm-segmented-like-dislike-button-renderer #segmented-like-button button",
-            "ytm-slim-video-action-bar-renderer #segmented-like-button button",
-            "like-button-view-model button",
-            "#segmented-like-button button",
-            'ytm-segmented-like-dislike-button-renderer button[aria-label^="Like" i]',
-            'ytm-segmented-like-dislike-button-renderer button[aria-label^="Unlike" i]',
-            'ytm-slim-video-action-bar-renderer button[aria-label^="Like" i]',
-            'ytm-slim-video-action-bar-renderer button[aria-label^="Unlike" i]'
-        ],
-        LIKE_TEXT_SELECTORS = [
-            'like-button-view-model button span[role="text"]',
-            "like-button-view-model button span",
-            "#segmented-like-button button span",
-            "ytm-like-button-renderer #text",
-            'ytm-segmented-like-dislike-button-renderer button[aria-label*="Like" i] span'
-        ],
-        BASE_STYLE = ".return-youtube-dislike-button,.return-youtube-like-button{display:inline-flex!important;align-items:center!important;column-gap:8px!important;flex:0 0 auto!important;overflow:visible!important;width:auto!important;min-width:auto!important;margin-inline-end:12px!important}.return-youtube-dislike-count,.return-youtube-like-count{flex:0 0 auto;margin-left:0!important;white-space:nowrap}";
-
-    // -------------------------------------------------------------------------
-    // Runtime state
-    // -------------------------------------------------------------------------
-
-    let currentVideoId = "",
-        currentDislikes = null,
-        currentLikes = null,
-        requestController = null,
-        requestVideoId = "",
-        updateTimer = 0,
-        updateDueAt = Infinity,
-        observer = null,
-        observerScope = null,
-        observerMode = "",
-        observerExpiry = 0,
-        styleElement = null,
-        desktopCss = "",
-        desktopRoot = null;
-
-    const cache = new Map;
-
-    // Format API counts using compact notation, e.g. 1.2K or 3.4M.
-    function formatCount(v) {
-        return formatter.format(v);
-    }
-
-    // Resolve the current video ID. Shorts return no ID so SPA navigation into
-    // /shorts/ shuts down the normal watch-page behavior.
-    function getVideoId() {
-        const u = new URL(location.href);
-
-        if (u.pathname.startsWith("/shorts/")) return "";
-
-        const v = u.searchParams.get("v");
-        if (v) return v;
-
-        const m = document.querySelector('meta[itemprop="videoId"],meta[itemprop="identifier"]');
-        if (m && m.content) return m.content;
-
-        const o = document.querySelector('meta[property="og:video:url"]');
-        if (o && o.content)
-            try {
-                return new URL(o.content).searchParams.get("v") || "";
-            } catch {}
-
-        return "";
-    }
-
-    // Return the first element matching any selector in the supplied list.
-    function findFirst(r, s) {
-        for (const q of s) {
-            const e = r.querySelector(q);
-            if (e) return e;
-        }
-        return null;
-    }
-
-    // -------------------------------------------------------------------------
-    // Small LRU-style response cache
-    // -------------------------------------------------------------------------
-
-    function getCached(v) {
-        if (!cache.has(v)) return;
-
-        const d = cache.get(v);
+// Cache API results and render counts across YouTube's supported action-bar layouts.
+(function () {
+  'use strict';
+  const API_URL = 'https://returnyoutubedislikeapi.com/votes?videoId=',
+    CACHE_KEY = 'return-youtube-dislike-cache-v2',
+    CACHE_TTL = 9e5,
+    STALE_CACHE_TTL = 864e5,
+    CACHE_LIMIT = 100,
+    UI_WAIT_LIMIT = 6e3,
+    formatter = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }),
+    BUTTON_SELECTOR = [
+      'like-button-view-model button',
+      'dislike-button-view-model button',
+      '#segmented-like-button button',
+      '#segmented-dislike-button button',
+      'ytm-like-button-renderer button',
+      'ytm-dislike-button-renderer button',
+      'ytm-slim-video-action-bar-renderer button[aria-label]',
+      'ytm-segmented-like-dislike-button-renderer button[aria-label]',
+      'segmented-like-dislike-button-view-model button[aria-label]',
+      '.ytp-fullscreen-quick-actions button[aria-label]',
+    ].join(','),
+    UI_SELECTOR = [
+      'like-button-view-model',
+      'dislike-button-view-model',
+      '#segmented-like-button',
+      '#segmented-dislike-button',
+      'ytm-slim-video-action-bar-renderer',
+      'ytm-segmented-like-dislike-button-renderer',
+      'segmented-like-dislike-button-view-model',
+      '.ytp-fullscreen-quick-actions',
+    ].join(','),
+    STYLE = `.return-youtube-vote-count{display:inline-block!important;flex:0 0 auto!important;min-width:0!important;margin:0!important;padding:0!important;color:currentColor!important;font:inherit!important;font-weight:500!important;line-height:1!important;white-space:nowrap!important;pointer-events:none!important}button.return-youtube-vote-button{display:inline-flex!important;align-items:center!important;column-gap:6px!important}:where(ytm-slim-video-action-bar-renderer,.ytp-fullscreen-quick-actions) :is(like-button-view-model,dislike-button-view-model).return-youtube-vote-host{flex:0 0 auto!important;width:auto!important;min-width:0!important;margin:0!important}:where(ytm-slim-video-action-bar-renderer,.ytp-fullscreen-quick-actions) button.return-youtube-vote-button{width:auto!important;min-width:0!important;margin:0!important;padding-inline:5px!important;column-gap:4px!important}ytm-slim-video-action-bar-renderer .return-youtube-vote-count{font-size:14px!important}.ytp-fullscreen-quick-actions .return-youtube-vote-count{font-size:12px!important}segmented-like-dislike-button-view-model button.return-youtube-vote-button,ytd-watch-metadata button.return-youtube-vote-button{width:auto!important;min-width:0!important}`;
+  let currentVideoId = '',
+    baseVotes = null,
+    localDelta = { likes: 0, dislikes: 0 },
+    currentVoteState = null,
+    requestController = null,
+    requestVideoId = '',
+    updateTimer = 0,
+    updateDueAt = Infinity,
+    observer = null,
+    observerExpiry = 0,
+    pendingVote = null;
+  const cache = loadCache();
+  function formatCount(v) {
+    return formatter.format(Math.max(0, Math.round(v)));
+  }
+  function getVideoId() {
+    const u = new URL(location.href);
+    if (u.pathname.startsWith('/shorts/')) return '';
+    const v = u.searchParams.get('v');
+    if (v) return v;
+    const m = document.querySelector('meta[itemprop="videoId"],meta[itemprop="identifier"]');
+    if (m && m.content) return m.content;
+    const c = document.querySelector('link[rel="canonical"],meta[property="og:video:url"]'),
+      h = c && (c.href || c.content);
+    if (h)
+      try {
+        return new URL(h, location.href).searchParams.get('v') || '';
+      } catch {}
+    return '';
+  }
+  function cleanVotes(v) {
+    if (!v || typeof v !== 'object') return null;
+    const d = Number(v.dislikes),
+      l = Number(v.likes);
+    return Number.isFinite(d) && d >= 0
+      ? { dislikes: d, likes: Number.isFinite(l) && l >= 0 ? l : null }
+      : null;
+  }
+  function loadCache() {
+    const m = new Map();
+    try {
+      const a = JSON.parse(localStorage.getItem(CACHE_KEY) || '[]');
+      if (!Array.isArray(a)) return m;
+      for (const e of a) {
+        if (!Array.isArray(e) || e.length !== 2) continue;
+        const [v, c] = e,
+          d = cleanVotes(c && c.votes),
+          t = Number(c && c.time);
+        typeof v === 'string' &&
+          d &&
+          Number.isFinite(t) &&
+          Date.now() - t <= STALE_CACHE_TTL &&
+          m.set(v, { votes: d, time: t });
+      }
+    } catch {}
+    return m;
+  }
+  function saveCache() {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify([...cache]));
+    } catch {}
+  }
+  function getCached(v, stale) {
+    const e = cache.get(v);
+    if (!e) return null;
+    const a = Date.now() - e.time;
+    if (a > STALE_CACHE_TTL || (!stale && a > CACHE_TTL)) {
+      if (a > STALE_CACHE_TTL) {
         cache.delete(v);
-        cache.set(v, d);
-        return d;
+        saveCache();
+      }
+      return null;
     }
-
-    function putCached(v, d) {
-        cache.has(v) && cache.delete(v);
-        cache.set(v, d);
-        cache.size > CACHE_LIMIT && cache.delete(cache.keys().next().value);
+    cache.delete(v);
+    cache.set(v, e);
+    return e.votes;
+  }
+  function putCached(v, d) {
+    cache.delete(v);
+    cache.set(v, { votes: d, time: Date.now() });
+    while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+    saveCache();
+  }
+  function ensureStyle() {
+    if (document.getElementById('return-youtube-dislike-style')) return;
+    const s = document.createElement('style');
+    s.id = 'return-youtube-dislike-style';
+    s.textContent = STYLE;
+    (document.head || document.documentElement).appendChild(s);
+  }
+  function clearCounts() {
+    document.querySelectorAll('.return-youtube-vote-count').forEach((e) => e.remove());
+    document
+      .querySelectorAll('.return-youtube-vote-button')
+      .forEach((e) => e.classList.remove('return-youtube-vote-button'));
+    document
+      .querySelectorAll('.return-youtube-vote-host')
+      .forEach((e) => e.classList.remove('return-youtube-vote-host'));
+  }
+  function abortRequest() {
+    requestController && requestController.abort();
+    requestController = null;
+    requestVideoId = '';
+  }
+  function cancelPendingVote() {
+    pendingVote && pendingVote.timer && clearTimeout(pendingVote.timer);
+    pendingVote = null;
+  }
+  function cancelUpdate() {
+    updateTimer && clearTimeout(updateTimer);
+    updateTimer = 0;
+    updateDueAt = Infinity;
+  }
+  function resetForNavigation() {
+    cancelUpdate();
+    cancelPendingVote();
+    abortRequest();
+    clearCounts();
+    currentVideoId = '';
+    baseVotes = null;
+    localDelta = { likes: 0, dislikes: 0 };
+    currentVoteState = null;
+  }
+  function scheduleUpdate(d = 0) {
+    const n = performance.now() + d;
+    if (updateTimer && n >= updateDueAt) return;
+    updateTimer && clearTimeout(updateTimer);
+    updateDueAt = n;
+    updateTimer = setTimeout(
+      () => {
+        updateTimer = 0;
+        updateDueAt = Infinity;
+        updatePage();
+      },
+      Math.max(0, n - performance.now())
+    );
+  }
+  async function fetchVotes(v) {
+    const fresh = getCached(v, false);
+    if (fresh) return fresh;
+    const stale = getCached(v, true);
+    abortRequest();
+    const a = new AbortController();
+    requestController = a;
+    requestVideoId = v;
+    try {
+      const r = await fetch(API_URL + encodeURIComponent(v), {
+        signal: a.signal,
+        credentials: 'omit',
+      });
+      if (!r.ok) return stale;
+      const d = cleanVotes(await r.json());
+      if (!d) return stale;
+      putCached(v, d);
+      return d;
+    } catch {
+      return stale;
+    } finally {
+      if (requestController === a) {
+        requestController = null;
+        requestVideoId = '';
+      }
     }
-
-    // -------------------------------------------------------------------------
-    // Injected style/presentation cleanup
-    // -------------------------------------------------------------------------
-
-    function ensureStyleElement() {
-        if (styleElement && document.contains(styleElement)) return;
-
-        styleElement = document.createElement("style");
-        styleElement.id = "return-youtube-dislike-style";
-        (document.head || document.documentElement).appendChild(styleElement);
-        refreshStyles();
-    }
-
-    function refreshStyles() {
-        styleElement && (styleElement.textContent = BASE_STYLE + "\n" + desktopCss);
-    }
-
-    function clearDesktop() {
-        desktopCss = "";
-
-        if (desktopRoot) {
-            desktopRoot.removeAttribute("data-return-youtube-dislike");
-            desktopRoot = null;
-        }
-
-        refreshStyles();
-    }
-
-    function clearInjectedCounts() {
-        document
-            .querySelectorAll(".return-youtube-dislike-count,.return-youtube-like-count")
-            .forEach(e => e.remove());
-
-        document
-            .querySelectorAll(".return-youtube-dislike-button,.return-youtube-like-button")
-            .forEach(e => e.classList.remove("return-youtube-dislike-button", "return-youtube-like-button"));
-    }
-
-    function clearPresentation() {
-        clearDesktop();
-        clearInjectedCounts();
-    }
-
-    // -------------------------------------------------------------------------
-    // Request, observer, and scheduled-update lifecycle
-    // -------------------------------------------------------------------------
-
-    function abortRequest() {
-        if (requestController) {
-            requestController.abort();
-            requestController = null;
-        }
-        requestVideoId = "";
-    }
-
-    function stopObserver() {
-        if (observer) {
-            observer.disconnect();
-            observer = null;
-        }
-
-        if (observerExpiry) {
-            clearTimeout(observerExpiry);
-            observerExpiry = 0;
-        }
-
-        observerScope = null;
-        observerMode = "";
-    }
-
-    function cancelScheduledUpdate() {
-        if (updateTimer) {
-            clearTimeout(updateTimer);
-            updateTimer = 0;
-            updateDueAt = Infinity;
-        }
-    }
-
-    function resetForNavigation() {
-        cancelScheduledUpdate();
-        abortRequest();
-        stopObserver();
-        clearPresentation();
-        currentVideoId = "";
-        currentDislikes = null;
-        currentLikes = null;
-    }
-
-    // Keep the earliest already-scheduled update instead of replacing it with
-    // an equal or later one.
-    function scheduleUpdate(d = 0) {
-        const n = performance.now() + d;
-
-        if (updateTimer && n >= updateDueAt) return;
-
-        updateTimer && clearTimeout(updateTimer);
-        updateDueAt = n;
-        updateTimer = setTimeout(() => {
-            updateTimer = 0;
-            updateDueAt = Infinity;
-            updatePage();
-        }, Math.max(0, n - performance.now()));
-    }
-
-    // -------------------------------------------------------------------------
-    // Return YouTube Dislike API
-    // -------------------------------------------------------------------------
-
-    async function fetchDislikes(v) {
-        const c = getCached(v);
-        if (c !== undefined) return c;
-
-        abortRequest();
-
-        const a = new AbortController;
-        requestController = a;
-        requestVideoId = v;
-
-        try {
-            const r = await fetch(API_URL + encodeURIComponent(v), {
-                signal: a.signal,
-                credentials: "omit"
-            });
-
-            if (!r.ok) return null;
-
-            const j = await r.json(),
-                d = Number(j && j.dislikes);
-
-            if (!Number.isFinite(d) || d < 0) return null;
-
-            if (!IS_MOBILE_SITE) {
-                putCached(v, d);
-                return d;
-            }
-
-            const l = Number(j && j.likes),
-                data = {
-                    dislikes: d,
-                    likes: Number.isFinite(l) && l >= 0 ? l : null
-                };
-
-            putCached(v, data);
-            return data;
-        } catch {
-            return null;
-        } finally {
-            if (requestController === a) {
-                requestController = null;
-                requestVideoId = "";
-            }
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Desktop rendering
-    // -------------------------------------------------------------------------
-
-    function findDesktopRoot(v) {
-        const roots = document.querySelectorAll("ytd-watch-flexy");
-        let first = null,
-            empty = null;
-
-        for (const r of roots) {
-            first || (first = r);
-
-            const i = r.getAttribute("video-id");
-            if (i === v) return r;
-
-            !empty && !i && (empty = r);
-        }
-
-        return empty || first;
-    }
-
-    // Desktop uses generated CSS to append the dislike count to YouTube's
-    // existing dislike button without inserting an extra visible count node.
-    function renderDesktop(d, r) {
-        const b = findFirst(r, DESKTOP_BUTTON_SELECTORS);
-        if (!b) return null;
-
-        clearInjectedCounts();
-
-        if (desktopRoot && desktopRoot !== r)
-            desktopRoot.removeAttribute("data-return-youtube-dislike");
-
-        desktopRoot = r;
-        desktopRoot.setAttribute("data-return-youtube-dislike", "active");
-
-        const t = " " + formatCount(d);
-
-        desktopCss = `ytd-watch-flexy[data-return-youtube-dislike="active"] dislike-button-view-model button::after,ytd-watch-flexy[data-return-youtube-dislike="active"] dislike-button-view-model button-view-model>button::after,ytd-watch-flexy[data-return-youtube-dislike="active"] dislike-button-view-model .yt-spec-button-shape-next::after,ytd-watch-flexy[data-return-youtube-dislike="active"] #segmented-dislike-button button::after{content:${JSON.stringify(t)};margin-left:8px;font-weight:500;color:var(--yt-spec-text-primary,currentColor);white-space:nowrap}`;
-
-        ensureStyleElement();
-        refreshStyles();
-
-        return {
-            mode: "desktop",
-            scope: r
-        };
-    }
-
-    // -------------------------------------------------------------------------
-    // Mobile rendering
-    // -------------------------------------------------------------------------
-
-    function ensureMobileCount(b, type, value, v, reference) {
-        const countClass = `return-youtube-${type}-count`,
-            buttonClass = `return-youtube-${type}-button`;
-
-        let c = b.querySelector(`.${countClass}`);
-
-        if (!c) {
-            c = document.createElement("span");
-            c.className = countClass;
-
-            // Reuse the appearance of a nearby native text element when one is
-            // available; otherwise fall back to fixed values.
-            if (reference && !reference.classList.contains("yt-icon-shape")) {
-                reference.classList.forEach(x => c.classList.add(x));
-
-                const s = getComputedStyle(reference);
-                c.style.fontSize = s.fontSize;
-                c.style.fontWeight = s.fontWeight;
-                c.style.lineHeight = s.lineHeight;
-                c.style.color = s.color;
-                s.marginLeft && s.marginLeft !== "0px" && (c.style.marginLeft = s.marginLeft);
-            } else {
-                c.style.fontSize = "14px";
-                c.style.fontWeight = "500";
-                c.style.lineHeight = "36px";
-                c.style.color = "currentColor";
-            }
-
-            b.classList.add(buttonClass);
-            b.insertBefore(c, b.children[1] || null);
-        }
-
-        c.textContent = formatCount(value);
-        c.dataset.videoId = v;
-        return c;
-    }
-
-    function renderMobile(d, l, v) {
-        const r = document.querySelector("ytm-watch") || document,
-            b = findFirst(r, MOBILE_BUTTON_SELECTORS),
-            likeButton = findFirst(r, MOBILE_LIKE_BUTTON_SELECTORS);
-
-        if (!b) return null;
-
-        clearDesktop();
-        ensureStyleElement();
-
-        const dislikeCount = ensureMobileCount(
-            b,
-            "dislike",
-            d,
-            v,
-            findFirst(r, LIKE_TEXT_SELECTORS)
-        );
-
-        const injectedLikeCount = likeButton && likeButton.querySelector(".return-youtube-like-count"),
-            nativeLikeCount = likeButton && [...likeButton.querySelectorAll("span")].some(
-                e => !e.classList.contains("return-youtube-like-count") && /\d/.test(e.textContent)
-            );
-
-        l !== null &&
-            likeButton &&
-            (injectedLikeCount || !nativeLikeCount) &&
-            ensureMobileCount(likeButton, "like", l, v, dislikeCount);
-
-        return {
-            mode: "mobile",
-            scope:
-                b.closest("ytm-watch") ||
-                b.closest("ytm-slim-video-action-bar-renderer") ||
-                b.closest("ytm-segmented-like-dislike-button-renderer") ||
-                b.parentElement ||
-                document.body
-        };
-    }
-
-    // -------------------------------------------------------------------------
-    // DOM observation and render orchestration
-    // -------------------------------------------------------------------------
-
-    function watchRenderedUi(x) {
-        const {
-            mode: m,
-            scope: s
-        } = x;
-
-        if (!s) return;
-        if (observer && observerScope === s && observerMode === m) return;
-
-        stopObserver();
-
-        observer = new MutationObserver(() => {
-            if (getVideoId() !== currentVideoId) {
-                scheduleUpdate(0);
-                return;
-            }
-
-            scheduleUpdate(m === "desktop" ? 80 : 50);
-        });
-
-        observerScope = s;
-        observerMode = m;
-
-        m === "desktop"
-            ? observer.observe(s, {
-                  attributes: true,
-                  attributeFilter: ["video-id"]
-              })
-            : observer.observe(s, {
-                  childList: true,
-                  subtree: true
-              });
-    }
-
-    // If the button UI is not present yet, temporarily watch the whole document
-    // until YouTube finishes building the relevant controls.
-    function waitForUi() {
-        if (observer && observerMode === "wait") return;
-
-        stopObserver();
-
-        const r = document.documentElement;
-        if (!r) {
-            scheduleUpdate(50);
-            return;
-        }
-
-        observer = new MutationObserver(() => scheduleUpdate(80));
-        observerScope = r;
-        observerMode = "wait";
-        observer.observe(r, {
-            childList: true,
-            subtree: true
-        });
-
-        observerExpiry = setTimeout(() => {
-            observerMode === "wait" && stopObserver();
-        }, UI_WAIT_LIMIT);
-    }
-
-    function renderCurrent() {
-        if (!currentVideoId || currentDislikes === null || getVideoId() !== currentVideoId) return;
-
-        let r;
-        const d = findDesktopRoot(currentVideoId);
-
-        r = d
-            ? renderDesktop(currentDislikes, d)
-            : renderMobile(currentDislikes, currentLikes, currentVideoId);
-
-        r ? watchRenderedUi(r) : waitForUi();
-    }
-
-    // Resolve the active video, load its counts if necessary, then render the
-    // current desktop or mobile interface.
-    async function updatePage() {
-        const v = getVideoId();
-
-        if (!v) {
-            currentVideoId && resetForNavigation();
-            return;
-        }
-
-        if (v !== currentVideoId) {
-            abortRequest();
-            stopObserver();
-            clearPresentation();
-            currentVideoId = v;
-            currentDislikes = null;
-            currentLikes = null;
-        }
-
-        if (currentDislikes !== null) {
-            renderCurrent();
-            return;
-        }
-
-        if (requestController && requestVideoId === v) return;
-
-        const data = await fetchDislikes(v);
-        if (data === null || currentVideoId !== v || getVideoId() !== v) return;
-
-        if (IS_MOBILE_SITE) {
-            currentDislikes = data.dislikes;
-            currentLikes = data.likes;
-        } else
-            currentDislikes = data;
-
-        renderCurrent();
-    }
-
-    // -------------------------------------------------------------------------
-    // YouTube navigation/event hooks
-    // -------------------------------------------------------------------------
-
-    function onNavigationStart() {
-        resetForNavigation();
-    }
-
-    function onNavigationFinish() {
-        scheduleUpdate(80);
-    }
-
-    function onHistoryNavigation() {
-        resetForNavigation();
-        scheduleUpdate(80);
-    }
-
-    const passiveCapture = {
-        capture: true,
-        passive: true
-    };
-
-    document.addEventListener("DOMContentLoaded", () => scheduleUpdate(0), passiveCapture);
-    window.addEventListener("load", () => scheduleUpdate(0), passiveCapture);
-    window.addEventListener("pageshow", () => scheduleUpdate(50), passiveCapture);
-    window.addEventListener("pagehide", resetForNavigation, passiveCapture);
-
-    document.addEventListener("yt-navigate-start", onNavigationStart, passiveCapture);
-    document.addEventListener("yt-navigate-finish", onNavigationFinish, passiveCapture);
-    document.addEventListener("ytm-navigate-start", onNavigationStart, passiveCapture);
-    document.addEventListener("ytm-navigate-finish", onNavigationFinish, passiveCapture);
-
-    document.addEventListener("yt-page-data-updated", () => scheduleUpdate(100), passiveCapture);
-    document.addEventListener("spfdone", () => scheduleUpdate(100), passiveCapture);
-    document.addEventListener("loadedmetadata", () => scheduleUpdate(20), true);
-    document.addEventListener("loadeddata", () => scheduleUpdate(20), true);
-    document.addEventListener("play", () => scheduleUpdate(0), true);
-
-    window.addEventListener("popstate", onHistoryNavigation, passiveCapture);
-
-    document.addEventListener("visibilitychange", () => {
-        document.hidden || scheduleUpdate(0);
+  }
+  function voteType(b) {
+    if (!(b instanceof Element)) return null;
+    if (
+      b.closest('dislike-button-view-model,#segmented-dislike-button,ytm-dislike-button-renderer')
+    )
+      return 'dislike';
+    if (b.closest('like-button-view-model,#segmented-like-button,ytm-like-button-renderer'))
+      return 'like';
+    if (!b.closest(UI_SELECTOR)) return null;
+    const a = b.getAttribute('aria-label') || '';
+    return /dislike/i.test(a)
+      ? 'dislike'
+      : /(?:^|\s)(?:like|unlike)(?:\s|$)/i.test(a)
+        ? 'like'
+        : null;
+  }
+  function getButtons(r = document) {
+    const a = [],
+      s = new Set();
+    r.querySelectorAll(BUTTON_SELECTOR).forEach((b) => {
+      const t = voteType(b);
+      t && !s.has(b) && (s.add(b), a.push({ button: b, type: t }));
     });
-
-    scheduleUpdate(0);
+    return a;
+  }
+  function hasNativeCount(b) {
+    return [
+      ...b.querySelectorAll(".ytSpecButtonShapeNextButtonTextContent,span[role='text'],#text"),
+    ].some(
+      (e) => !e.classList.contains('return-youtube-vote-count') && /\d/.test(e.textContent || '')
+    );
+  }
+  function displayed(type) {
+    if (!baseVotes) return null;
+    const k = type === 'like' ? 'likes' : 'dislikes',
+      v = baseVotes[k];
+    return v === null ? null : Math.max(0, v + localDelta[k]);
+  }
+  function removeCount(b, t) {
+    b.querySelectorAll(`.return-youtube-vote-count[data-vote-type="${t}"]`).forEach((e) =>
+      e.remove()
+    );
+    if (!b.querySelector('.return-youtube-vote-count')) {
+      b.classList.remove('return-youtube-vote-button');
+      const h = b.closest('like-button-view-model,dislike-button-view-model');
+      h && h.classList.remove('return-youtube-vote-host');
+    }
+  }
+  function ensureCount(b, t, v) {
+    if (v === null || (t === 'like' && hasNativeCount(b))) {
+      removeCount(b, t);
+      return;
+    }
+    let c = b.querySelector(`.return-youtube-vote-count[data-vote-type="${t}"]`);
+    if (!c) {
+      c = document.createElement('span');
+      c.className = 'return-youtube-vote-count';
+      c.dataset.voteType = t;
+      const f = [...b.children].find((e) =>
+        e.matches('yt-touch-feedback-shape,yt-light-shape,yt-interaction')
+      );
+      b.insertBefore(c, f || null);
+      b.classList.add('return-youtube-vote-button');
+      const h = b.closest('like-button-view-model,dislike-button-view-model');
+      h && h.classList.add('return-youtube-vote-host');
+    }
+    c.textContent = formatCount(v);
+    c.dataset.videoId = currentVideoId;
+  }
+  function renderCurrent() {
+    if (!baseVotes || !currentVideoId || getVideoId() !== currentVideoId) return false;
+    ensureStyle();
+    const b = getButtons();
+    for (const { button: e, type: t } of b) ensureCount(e, t, displayed(t));
+    return b.some((e) => e.type === 'dislike');
+  }
+  function inferVoteState(preferred) {
+    let b = getButtons();
+    if (!b.length) return null;
+    const visible = b.filter((e) => e.button.getClientRects().length);
+    visible.length && (b = visible);
+    if (preferred && preferred.getAttribute('aria-pressed') === 'true') return voteType(preferred);
+    const p = b.find((e) => e.button.getAttribute('aria-pressed') === 'true');
+    return p ? p.type : 'none';
+  }
+  function transition(from, to) {
+    if (from === to) return;
+    from === 'like' && localDelta.likes--;
+    from === 'dislike' && localDelta.dislikes--;
+    to === 'like' && localDelta.likes++;
+    to === 'dislike' && localDelta.dislikes++;
+    currentVoteState = to;
+    renderCurrent();
+  }
+  function eventButton(e) {
+    const p = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    for (const n of p) if (n instanceof HTMLButtonElement && voteType(n)) return n;
+    return e.target instanceof Element ? e.target.closest('button') : null;
+  }
+  function onVoteClick(e) {
+    const b = eventButton(e),
+      t = voteType(b);
+    if (!t || !currentVideoId || getVideoId() !== currentVideoId) return;
+    const before = currentVoteState || inferVoteState(b) || 'none',
+      expected = before === t ? 'none' : t;
+    cancelPendingVote();
+    transition(before, expected);
+    const v = currentVideoId;
+    pendingVote = {
+      videoId: v,
+      expected,
+      timer: setTimeout(() => {
+        if (!pendingVote || pendingVote.videoId !== v) return;
+        const actual = inferVoteState();
+        actual !== null &&
+          actual !== currentVoteState &&
+          transition(currentVoteState || 'none', actual);
+        pendingVote = null;
+      }, 1200),
+    };
+  }
+  function touchesUi(m) {
+    if (m.type === 'attributes') return m.attributeName === 'video-id';
+    for (const n of [...m.addedNodes, ...m.removedNodes])
+      if (
+        n instanceof Element &&
+        (n.matches(UI_SELECTOR) ||
+          n.querySelector(UI_SELECTOR) ||
+          (n.matches('button') && voteType(n)) ||
+          n.querySelector(BUTTON_SELECTOR))
+      )
+        return true;
+    return false;
+  }
+  function startObserver() {
+    if (observer || !document.documentElement) return;
+    observer = new MutationObserver((m) => {
+      if (getVideoId() !== currentVideoId) {
+        scheduleUpdate(0);
+        return;
+      }
+      m.some(touchesUi) && scheduleUpdate(50);
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['video-id'],
+    });
+  }
+  function waitForUi() {
+    observerExpiry && clearTimeout(observerExpiry);
+    observerExpiry = setTimeout(() => {
+      observerExpiry = 0;
+      scheduleUpdate(0);
+    }, UI_WAIT_LIMIT);
+  }
+  async function updatePage() {
+    startObserver();
+    const v = getVideoId();
+    if (!v) {
+      currentVideoId && resetForNavigation();
+      return;
+    }
+    if (v !== currentVideoId) {
+      cancelPendingVote();
+      abortRequest();
+      clearCounts();
+      currentVideoId = v;
+      baseVotes = null;
+      localDelta = { likes: 0, dislikes: 0 };
+      currentVoteState = null;
+    }
+    if (baseVotes) {
+      renderCurrent() || waitForUi();
+      return;
+    }
+    if (requestController && requestVideoId === v) return;
+    const d = await fetchVotes(v);
+    if (!d || currentVideoId !== v || getVideoId() !== v) return;
+    baseVotes = d;
+    currentVoteState = inferVoteState();
+    renderCurrent() || waitForUi();
+  }
+  function navStart() {
+    resetForNavigation();
+  }
+  function navFinish() {
+    scheduleUpdate(80);
+  }
+  function historyNav() {
+    resetForNavigation();
+    scheduleUpdate(80);
+  }
+  const passiveCapture = { capture: true, passive: true };
+  document.addEventListener('click', onVoteClick, true);
+  document.addEventListener('DOMContentLoaded', () => scheduleUpdate(0), passiveCapture);
+  window.addEventListener('load', () => scheduleUpdate(0), passiveCapture);
+  window.addEventListener('pageshow', () => scheduleUpdate(50), passiveCapture);
+  window.addEventListener('pagehide', resetForNavigation, passiveCapture);
+  document.addEventListener('yt-navigate-start', navStart, passiveCapture);
+  document.addEventListener('yt-navigate-finish', navFinish, passiveCapture);
+  document.addEventListener('ytm-navigate-start', navStart, passiveCapture);
+  document.addEventListener('ytm-navigate-finish', navFinish, passiveCapture);
+  document.addEventListener('yt-page-data-updated', () => scheduleUpdate(100), passiveCapture);
+  document.addEventListener('spfdone', () => scheduleUpdate(100), passiveCapture);
+  document.addEventListener('loadedmetadata', () => scheduleUpdate(20), true);
+  document.addEventListener('loadeddata', () => scheduleUpdate(20), true);
+  document.addEventListener('play', () => scheduleUpdate(0), true);
+  window.addEventListener('popstate', historyNav, passiveCapture);
+  document.addEventListener('visibilitychange', () => {
+    document.hidden || scheduleUpdate(0);
+  });
+  scheduleUpdate(0);
 })();
