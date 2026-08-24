@@ -1,25 +1,57 @@
-# Brave Scriptlets
+# Userscript Collection
 
-Lightweight userscripts for Brave Browser’s Custom Scriptlets feature. Also compatible with custom userscript extensions.
+Lightweight userscripts for common video, social-media, navigation, and reading-site tasks. They are intended for userscript managers and other compatible script-hosting environments.
 
-These scriptlets are designed to replace common browser extensions with minimal overhead and zero configuration.
+The `.user.js` files are the canonical versions in this collection. They can be used with managers such as Tampermonkey, Violentmonkey, or Greasemonkey. Brave Browser is also supported, including environments that accept custom scriptlets.
 
 > [!WARNING]
 > Always review third-party code before executing it in your browser environment.
 
 ## Usage
 
-### Brave Browser
+### Userscript managers
 
-For each scriptlet in the `scriptlets` folder:
+Install the corresponding `.user.js` file in your userscript manager. Keep the userscript metadata block at the top of each file so the manager can identify its name, sites, and permissions.
 
-1. Open `brave://settings/shields/filters/`
-2. Create a new custom scriptlet with the specified filename and contents (ignore any commented lines)
-3. Paste the provided filter rule into the **Create Custom Filters** box
+### Optional custom scriptlet environments
 
-### Userscript Extensions
+Some compatible content-filter environments can load these as custom scriptlets. In Brave, for example, custom rules can be added through `brave://settings/shields/filters/`. Use the mappings below where supported; Tube Cleaner does not have a custom-filter mapping in this collection and should be installed as a `.user.js` userscript.
 
-If you are using a userscript manager such as Tampermonkey, Violentmonkey, or Greasemonkey (in Brave or another browser), copy the full contents of the corresponding `.user.js` file instead.
+When a scriptlet environment requires it, omit the userscript metadata block and follow that environment's own scriptlet format.
+
+## Included userscripts
+
+| File | Purpose |
+| --- | --- |
+| `Bypass Paywalls.user.js` | Removes paywall barriers on supported sites. |
+| `DeArrow Titles YouTube.user.js` | Replaces YouTube titles with DeArrow titles. |
+| `Location Blocking X.user.js` | Displays X account locations and optionally filters posts. |
+| `Redirect Google Maps.user.js` | Opens coordinate-based Google Maps links in Apple Maps. |
+| `Redirect Imgur.user.js` | Redirects Imgur pages to Rimgo. |
+| `Redirect Instagram.user.js` | Keeps Instagram reels and stories on the web and blocks App Store handoffs. |
+| `Redirect X.user.js` | Redirects supported X pages to Xcancel. |
+| `Return Dislikes YouTube.user.js` | Restores YouTube dislike counts. |
+| `SponsorBlock YouTube.user.js` | Skips SponsorBlock segments in YouTube videos. |
+| `Tube Cleaner Lite.user.js` | Cleans the native mobile YouTube player and preserves native playback features. |
+
+Tube Cleaner Lite is sourced from [wBlock-userscripts](https://github.com/0xCUB3/wBlock-userscripts/tree/main/packages/tube-cleaner). The version in this collection is intended to run as a userscript and has no custom-filter rule listed below.
+
+## Custom-filter mappings
+
+These mappings apply only to environments that support the `##+js(...)` custom-scriptlet format:
+
+```txt
+google.com##+js(user-redirect-google-maps.js)
+imgur.com##+js(user-redirect-imgur.js)
+instagram.com##+js(user-redirect-instagram.js)
+tiktok.com##+js(user-clean-tiktok.js)
+youtube.com##+js(user-dearrow-titles-youtube.js)
+youtube.com##+js(user-dislikes-youtube.js)
+youtube.com##+js(user-sponsorblock-youtube.js)
+x.com##+js(user-location-blocking-x.js)
+```
+
+The TikTok mapping is retained as a reference, but `user-clean-tiktok.js` is not included in this archive. There is no Tube Cleaner mapping because Tube Cleaner is supplied here as a regular `.user.js` userscript.
 
 # Scriptlets
 
