@@ -15,7 +15,7 @@ Install the corresponding `.user.js` file in your userscript manager. Keep the u
 
 ### Optional custom scriptlet environments
 
-Some compatible content-filter environments can load these as custom scriptlets. In Brave, for example, custom rules can be added through `brave://settings/shields/filters/`. Use the mappings below where supported; Tube Cleaner does not have a custom-filter mapping in this collection and should be installed as a `.user.js` userscript.
+Some compatible content-filter environments can load these as custom scriptlets. In Brave, for example, custom rules can be added through `brave://settings/shields/filters/`. Use the mappings below where supported; Tube Cleaner does not have a custom-filter mapping and is intended only for iOS Safari as a `.user.js` userscript.
 
 When a scriptlet environment requires it, omit the userscript metadata block and follow that environment's own scriptlet format.
 
@@ -32,9 +32,9 @@ When a scriptlet environment requires it, omit the userscript metadata block and
 | `Redirect X.user.js` | Redirects supported X pages to Xcancel. |
 | `Return Dislikes YouTube.user.js` | Restores YouTube dislike counts. |
 | `SponsorBlock YouTube.user.js` | Skips SponsorBlock segments in YouTube videos. |
-| `Tube Cleaner Lite.user.js` | Cleans the native mobile YouTube player and preserves native playback features. |
+| `Tube Cleaner Lite.user.js` | Cleans the native YouTube player on iOS Safari and preserves native playback features. |
 
-Tube Cleaner Lite is sourced from [wBlock-userscripts](https://github.com/0xCUB3/wBlock-userscripts/tree/main/packages/tube-cleaner). The version in this collection is intended to run as a userscript and has no custom-filter rule listed below.
+Tube Cleaner Lite is sourced from [wBlock-userscripts](https://github.com/0xCUB3/wBlock-userscripts/tree/main/packages/tube-cleaner). The version in this collection is intended only for iOS Safari and must run as a userscript; it has no custom-filter rule.
 
 ## Custom-filter mappings
 
@@ -49,9 +49,10 @@ youtube.com##+js(user-dearrow-titles-youtube.js)
 youtube.com##+js(user-dislikes-youtube.js)
 youtube.com##+js(user-sponsorblock-youtube.js)
 x.com##+js(user-location-blocking-x.js)
+x.com##+js(user-redirect-x.js)
 ```
 
-The TikTok mapping is retained as a reference, but `user-clean-tiktok.js` is not included in this archive. There is no Tube Cleaner mapping because Tube Cleaner is supplied here as a regular `.user.js` userscript.
+The TikTok mapping is retained as a reference, but `user-clean-tiktok.js` is not included in this archive. There is no Tube Cleaner mapping because Tube Cleaner is an iOS Safari userscript rather than a custom scriptlet.
 
 # Scriptlets
 
@@ -148,6 +149,78 @@ Then paste the following into the **Create Custom Filters** box:
 
 ```js
 google.com##+js(user-redirect-google-maps.js)
+```
+
+## Redirect Imgur
+
+Redirects Imgur links to Rimgo.
+
+### Setup
+
+Create the scriptlet as:
+
+```txt
+user-redirect-imgur.js
+```
+
+Then paste the following into the **Create Custom Filters** box:
+
+```js
+imgur.com##+js(user-redirect-imgur.js)
+```
+
+## Redirect Instagram
+
+Redirects supported Instagram pages to Imginn while keeping Reels and Stories on the Instagram website and blocking App Store handoffs.
+
+### Setup
+
+Create the scriptlet as:
+
+```txt
+user-redirect-instagram.js
+```
+
+Then paste the following into the **Create Custom Filters** box:
+
+```js
+instagram.com##+js(user-redirect-instagram.js)
+```
+
+## Redirect X
+
+Redirects supported X pages to Xcancel.
+
+### Setup
+
+Create the scriptlet as:
+
+```txt
+user-redirect-x.js
+```
+
+Then paste the following into the **Create Custom Filters** box:
+
+```js
+x.com##+js(user-redirect-x.js)
+```
+
+## Clean TikTok
+
+Runs the Clean TikTok scriptlet on TikTok.
+
+### Setup
+
+Create the scriptlet as:
+
+```txt
+user-clean-tiktok.js
+```
+
+Then paste the following into the **Create Custom Filters** box:
+
+```js
+tiktok.com##+js(user-clean-tiktok.js)
 ```
 
 ## Return YouTube Dislikes
